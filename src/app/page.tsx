@@ -1,101 +1,136 @@
-import Image from "next/image";
+'use client'
 
-export default function Home() {
+import { useState, useEffect, useRef } from 'react'
+import { FFmpeg } from '@ffmpeg/ffmpeg'
+import { fetchFile, toBlobURL } from '@ffmpeg/util'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
+import { VideoPlayer } from '@/components/video-player'
+
+export default function VideoSplitter() {
+  const [video, setVideo] = useState<File | null>(null)
+  const [splitDuration, setSplitDuration] = useState<number>(60)
+  const [status, setStatus] = useState<string>('Idle')
+  const [progress, setProgress] = useState<number>(0)
+  const [outputCount, setOutputCount] = useState<number>(0)
+  const ffmpegRef = useRef<FFmpeg>(new FFmpeg())
+  const [videoDuration, setVideoDuration] = useState<number>(0)
+  const [videosList, setVideosList] = useState<{ url: string; name: string }[]>([])
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const load = async () => {
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+    const ffmpeg = ffmpegRef.current
+
+    ffmpeg.on('log', ({ message }) => {
+      console.log(message)
+    })
+
+    ffmpeg.on('progress', ({ progress }) => {
+      setProgress(Math.round(progress * 100))
+    })
+
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    })
+  }
+
+  const handleDownload = (url: string, filename: string) => {
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+  }
+
+  const handleSplitDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    if (!value) return
+    setSplitDuration(parseInt(value))
+  }
+
+  const splitVideo = async () => {
+    if (!video || !ffmpegRef.current) return
+
+    const ffmpeg = ffmpegRef.current
+    const inputName = 'input.mp4'
+    setStatus('Starting')
+    setProgress(0)
+    setVideosList([])
+
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(video))
+
+      const totalSeconds = videoDuration
+      const splitCount = Math.ceil(totalSeconds / splitDuration)
+      setOutputCount(splitCount)
+
+      setStatus('Processing')
+
+      const newVideosList = []
+      for (let i = 0; i < splitCount; i++) {
+        const startTime = i * splitDuration
+        const outputName = `output_${i + 1}.mp4`
+
+        await ffmpeg.exec(['-i', inputName, '-ss', startTime.toString(), '-t', splitDuration.toString(), '-c', 'copy', outputName])
+
+        const data = await ffmpeg.readFile(outputName)
+        const blob = new Blob([data], { type: 'video/mp4' })
+        const url = URL.createObjectURL(blob)
+        newVideosList.push({ url, name: outputName })
+      }
+
+      setVideosList(newVideosList)
+      setStatus('Complete')
+    } catch (error) {
+      console.error(error)
+      setStatus('Error: ' + (error as Error).message)
+    }
+  }
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <div className="container mx-auto p-4 max-w-xl">
+      <h1 className="text-2xl font-bold mb-4">Video Splitter</h1>
+      <div className="space-y-4">
+        <div>
+          <Input type="file" accept="video/*" onChange={e => setVideo(e.target.files?.[0] || null)} className="mb-2" aria-label="Select video file" />
+          {video && (
+            <>
+              <VideoPlayer file={video} onDurationChange={duration => setVideoDuration(duration)} />
+              {videoDuration > 0 && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Video duration: {Math.floor(videoDuration / 60)}m {videoDuration % 60}s
+                </p>
+              )}
+            </>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        <div className="flex items-center space-x-2">
+          <Input type="number" value={splitDuration} onChange={handleSplitDurationChange} min="1" className="w-24" aria-label="Split duration in seconds" />
+          <span>seconds per split</span>
+        </div>
+        <Button onClick={splitVideo} disabled={!video || status === 'Processing'} aria-busy={status === 'Processing'}>
+          Split Video
+        </Button>
+        <div aria-live="polite">Status: {status}</div>
+        {status === 'Processing' && <Progress value={progress} className="w-full" aria-label={`Processing: ${progress}%`} />}
+        {outputCount > 0 && <div>Number of output videos: {outputCount}</div>}
+        {videosList.length > 0 && (
+          <div className="space-y-2">
+            <h2 className="text-xl font-semibold">Generated Videos</h2>
+            {videosList.map((video, index) => (
+              <div key={index} className="flex justify-between items-center p-2 bg-gray-100 rounded">
+                <span>{video.name}</span>
+                <Button onClick={() => handleDownload(video.url, video.name)}>Download</Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
-  );
+  )
 }
